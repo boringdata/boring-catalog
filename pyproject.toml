@@ -1,5 +1,5 @@
 [project]
-name = "boring-catalog"
+name = "boringcatalog"
 version = "0.1.0"
 description = "A DuckDB-based Iceberg catalog implementation"
 readme = "README.md"
@@ -12,6 +12,7 @@ dependencies = [
     "s3fs>=2023.12.0",
     "pyiceberg>=0.6.0"
 ]
+urls = {Homepage = "https://github.com/boringdata/boring-catalog"}
 
 [project.optional-dependencies]
 test = [

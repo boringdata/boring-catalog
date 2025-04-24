@@ -20,7 +20,7 @@ Boring Catalog uses S3 conditional PUT operations to synchronize the catalog acr
 ## Installation
 
 ```bash
-pip install boring-catalog
+pip install boringcatalog
 ```
 
 ## Usage
@@ -28,7 +28,7 @@ pip install boring-catalog
 ### Create namespace and table
 
 ```python
-from boring_catalog import BoringCatalog
+from boringcatalog import BoringCatalog
 from pyiceberg.schema import Schema
 from pyiceberg.types import LongType, StringType, DecimalType
 from pyiceberg.schema import NestedField
@@ -59,7 +59,7 @@ if ("my_namespace", "my_table_2") not in catalog.list_tables():
 ### Append data
 
 ```python
-from boring_catalog import BoringCatalog
+from boringcatalog import BoringCatalog
 from pyiceberg.schema import Schema
 from pyiceberg.types import LongType, StringType, DecimalType
 from pyiceberg.schema import NestedField
