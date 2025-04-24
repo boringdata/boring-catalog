@@ -1,13 +1,21 @@
 # Boring Catalog
 
-A DuckDB-based Iceberg catalog implementation that provides a simple and efficient way to manage Iceberg tables using DuckDB as the backend storage.
+A DuckDB-based Iceberg catalog implementation.
 
-## Features
+The catalog is stored as a single .duckdb file in S3, making it lightweight and portable.
 
-- DuckDB-based catalog storage
-- S3 support for table storage
-- Concurrent access support with locking mechanism
-- Full Iceberg catalog API implementation
+## Why Boring Catalog?
+- Eliminates the need to host or maintain a dedicated catalog service
+- We can store all our Iceberg metadata in a single DuckDB file, including:
+  - Catalog metadata
+  - Pointers to Iceberg metadata files (via `read_json('s3://...')`)
+  - References to Iceberg table data (via `scan_iceberg('s3://...')`)
+- Enables easy sharing across teams and environments through simple S3 URLs using `ATTACH '<s3_url>'`
+- We can easily expose a FastAPI REST endpoint to enable writes from Snowflake and other external systems
+
+## How It Works
+
+Boring Catalog uses S3 conditional PUT operations to synchronize the catalog across multiple clients, effectively preventing race conditions during concurrent access.
 
 ## Installation
 
@@ -17,52 +25,73 @@ pip install boring-catalog
 
 ## Usage
 
+### Create namespace and table
+
 ```python
 from boring_catalog import BoringCatalog
+from pyiceberg.schema import Schema
+from pyiceberg.types import LongType, StringType, DecimalType
+from pyiceberg.schema import NestedField
 
-# Create a catalog instance
 catalog = BoringCatalog(
-    name="my_catalog",
-    warehouse="s3://my-bucket/warehouse",
-    s3_endpoint="http://localhost:9000",  # Optional: for custom S3 endpoints
-    s3_access_key_id="access_key",       # Optional: for S3 authentication
-    s3_secret_access_key="secret_key"    # Optional: for S3 authentication
+    "my_catalog",
+    warehouse="s3://{your-bucket}/boringcatalog"
 )
 
-# Create a namespace
-catalog.create_namespace("my_namespace")
-
-# Create a table
-from pyiceberg.schema import Schema
-from pyiceberg.types import LongType, StringType
+if ("my_namespace",) not in catalog.list_namespaces():
+    catalog.create_namespace("my_namespace")
 
 schema = Schema(
-    LongType(), "id",
-    StringType(), "name"
+    NestedField(1, "id", LongType(), required=True),
+    NestedField(2, "data", StringType()),
+    NestedField(3, "amount", DecimalType(5, 1))
 )
 
-table = catalog.create_table(
-    identifier=("my_namespace", "my_table"),
-    schema=schema
-)
-
-# List tables in a namespace
-tables = catalog.list_tables("my_namespace")
-
-# Drop a table
-catalog.drop_table(("my_namespace", "my_table"))
-
-# Drop a namespace
-catalog.drop_namespace("my_namespace")
+if ("my_namespace", "my_table_2") not in catalog.list_tables():
+    table = catalog.create_table(
+        identifier=("my_namespace", "my_table_2"),
+        schema=schema,
+        properties={"write.format.default": "parquet"}
+    )
 ```
 
-## Requirements
 
-- Python >= 3.10
-- DuckDB >= 0.9.0
-- s3fs >= 2023.12.0
-- pyiceberg >= 0.6.0
+### Append data
 
-## License
+```python
+from boring_catalog import BoringCatalog
+from pyiceberg.schema import Schema
+from pyiceberg.types import LongType, StringType, DecimalType
+from pyiceberg.schema import NestedField
 
-MIT
+catalog = BoringCatalog(
+    "my_catalog",
+    warehouse="s3://{your-bucket}/boringcatalog"
+)
+
+table = catalog.load_table(("my_namespace", "my_table_2"))
+
+dummy_data = pd.DataFrame({
+    "id": pd.Series(range(1, 10001), dtype="Int32"), 
+    "data": [f"Transaction_{i}" for i in range(1, 10001)],
+    "amount": [Decimal(str(min(i * 10.5, 9999.9))).quantize(Decimal('0.1')) for i in range(1, 10001)]   
+})
+
+arrow_table = pa.Table.from_pandas(
+    dummy_data,
+    schema=pa.schema([
+        ('id', pa.int32(), False), 
+        ('data', pa.string(), True),
+        ('amount', pa.decimal128(5, 1), True) 
+    ]),
+    safe=True
+)
+
+table.append(arrow_table)
+```
+
+Next steps:
+[] Reflect tables in the catalog (CREATE VIEW AS SELECT * FROM READ_ICEBERG())
+[] Reflect snapshots in a catalog table (CREATE TABLE snapshots as read_json())
+[] Improve performance (sync of .duckdb from local to s3 takes too long)
+[] Add fastAPI on top of the catalog to allow write from Snowflake and other clients

@@ -54,6 +54,9 @@ from pyiceberg.serializers import FromInputFile
 
 from .lock import CatalogLock    
 
+import logging
+from time import perf_counter
+
 # Constants for DuckDB table structure
 COL_IDENTIFIER = "identifier"
 COL_NAMESPACE = "namespace"
@@ -63,6 +66,9 @@ COL_CREATED_AT = "created_at"
 NAMESPACE_TYPE = "NAMESPACE"
 PROPERTY_PREFIX = "p."
 
+# Set up logging
+logger = logging.getLogger(__name__)
+
 class ConcurrentModificationError(CommitFailedException):
     """Raised when a concurrent modification is detected."""
     pass
@@ -71,27 +77,59 @@ def write_operation(func):
     """Decorator for write operations that need locking and DB sync."""
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
+        start_time = perf_counter()
         try:
             if not self.catalog_lock.try_acquire_lock(func.__name__):
                 raise ConcurrentModificationError(f"{func.__name__} requires lock")
+            lock_time = perf_counter()
+            logger.debug(f"{func.__name__}: Lock acquired in {(lock_time - start_time)*1000:.2f}ms")
+            
             self._refresh_catalog()
+            refresh_time = perf_counter()
+            logger.debug(f"{func.__name__}: Catalog refreshed in {(refresh_time - lock_time)*1000:.2f}ms")
+            
             temp_path = self._create_local_catalog("catalog")
+            local_time = perf_counter()
+            logger.debug(f"{func.__name__}: Local catalog created in {(local_time - refresh_time)*1000:.2f}ms")
+            
             result = func(self, *args, **kwargs)
+            operation_time = perf_counter()
+            logger.debug(f"{func.__name__}: Operation completed in {(operation_time - local_time)*1000:.2f}ms")
             return result
         finally:
-            self._push_local_catalog(temp_path)
-            self.catalog_lock.release_lock()
+            try:
+                self._push_local_catalog(temp_path)
+                push_time = perf_counter()
+                logger.debug(f"{func.__name__}: Local catalog pushed in {(push_time - operation_time)*1000:.2f}ms")
+                
+                self.catalog_lock.release_lock()
+                end_time = perf_counter()
+                logger.debug(f"{func.__name__}: Lock released in {(end_time - push_time)*1000:.2f}ms")
+                logger.debug(f"{func.__name__}: Total operation time: {(end_time - start_time)*1000:.2f}ms")
+            except Exception as e:
+                logger.error(f"{func.__name__}: Error in cleanup: {str(e)}")
+                raise
     return wrapper
 
 def read_operation(func):
     """Decorator for read operations that need latest DB state."""
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
+        start_time = perf_counter()
         try:
             self._refresh_catalog()
-            return func(self, *args, **kwargs)
-        finally:
-            pass
+            refresh_time = perf_counter()
+            logger.debug(f"{func.__name__}: Catalog refreshed in {(refresh_time - start_time)*1000:.2f}ms")
+            
+            result = func(self, *args, **kwargs)
+            operation_time = perf_counter()
+            logger.debug(f"{func.__name__}: Operation completed in {(operation_time - refresh_time)*1000:.2f}ms")
+            logger.debug(f"{func.__name__}: Total operation time: {(operation_time - start_time)*1000:.2f}ms")
+            return result
+        except Exception as e:
+            end_time = perf_counter()
+            logger.error(f"{func.__name__}: Operation failed after {(end_time - start_time)*1000:.2f}ms: {str(e)}")
+            raise
     return wrapper
 
 class BoringCatalog(MetastoreCatalog):
@@ -127,6 +165,9 @@ class BoringCatalog(MetastoreCatalog):
         self.conn = duckdb.connect(":memory:")
         self.conn.execute("CREATE OR REPLACE SECRET secret (TYPE s3, PROVIDER credential_chain);")
         
+        # Initialize last known ETag
+        self.last_etag = None
+        
         if not self.s3.exists(self.catalog_uri):
             self.create_tables()
             temp_path = self._create_local_catalog("memory")
@@ -136,10 +177,20 @@ class BoringCatalog(MetastoreCatalog):
     
     def _refresh_catalog(self):
         """Refresh local catalog from S3."""
+        # Check if catalog has changed
+        if not self._has_catalog_changed():
+            logger.debug("_refresh_catalog: Catalog unchanged, skipping refresh")
+            return
+            
         self.conn.execute("USE memory")
+        
         self.conn.execute("DETACH DATABASE IF EXISTS catalog")
+        
         self.conn.execute(f"ATTACH '{self.catalog_uri}' AS catalog")
+        
         self.conn.execute("USE catalog")
+        
+        logger.debug("_refresh_catalog: Catalog refreshed successfully")
 
     def _create_local_catalog(self, db_name):
         """Create local catalog."""
@@ -154,13 +205,20 @@ class BoringCatalog(MetastoreCatalog):
         return temp_path
 
     def _push_local_catalog(self, temp_path):
-        """Refresh local catalog from S3."""
+        """Push local catalog to S3."""
         self.conn.execute("USE memory")
         self.conn.execute(f"DETACH DATABASE IF EXISTS local_catalog")
 
         with open(temp_path, 'rb') as f_src:
             with self.s3.open(self.catalog_uri, 'wb') as f_dst:
                 f_dst.write(f_src.read())
+        
+        # Update ETag after pushing changes
+        try:
+            self.last_etag = self.s3.info(self.catalog_uri)["ETag"]
+        except Exception as e:
+            logger.warning(f"Error updating catalog ETag after push: {str(e)}")
+            self.last_etag = None
         
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -705,4 +763,73 @@ class BoringCatalog(MetastoreCatalog):
         except Exception as e:
             raise TableAlreadyExistsError(f"Table {namespace}.{table_name} already exists") from e
 
-        return self.load_table(identifier) 
+        return self.load_table(identifier)
+
+    @write_operation
+    def update_namespace_properties(
+        self, namespace: Union[str, Identifier], removals: Optional[Set[str]] = None, updates: Properties = EMPTY_DICT
+    ) -> PropertiesUpdateSummary:
+        """Remove provided property keys and update properties for a namespace.
+
+        Args:
+            namespace (str | Identifier): Namespace identifier.
+            removals (Set[str]): Set of property keys that need to be removed. Optional Argument.
+            updates (Properties): Properties to be updated for the given namespace.
+
+        Returns:
+            PropertiesUpdateSummary: Summary of the updates.
+
+        Raises:
+            NoSuchNamespaceError: If a namespace with the given name does not exist.
+            ValueError: If removals and updates have overlapping keys.
+        """
+        namespace_str = Catalog.namespace_to_string(namespace)
+        if not self._namespace_exists(namespace_str):
+            raise NoSuchNamespaceError(f"Namespace {namespace_str} does not exist")
+
+        current_properties = self.load_namespace_properties(namespace=namespace)
+        properties_update_summary = self._get_updated_props_and_update_summary(
+            current_properties=current_properties, removals=removals, updates=updates
+        )[0]
+
+        if removals:
+            self.conn.execute("""
+                DELETE FROM local_catalog.iceberg_namespace_properties
+                WHERE catalog_name = ? AND namespace = ? AND property_key IN (?)
+            """, [self.name, namespace_str, tuple(removals)])
+
+        if updates:
+            # Delete existing properties that will be updated
+            self.conn.execute("""
+                DELETE FROM local_catalog.iceberg_namespace_properties
+                WHERE catalog_name = ? AND namespace = ? AND property_key IN (?)
+            """, [self.name, namespace_str, tuple(updates.keys())])
+
+            # Insert updated properties
+            for key, value in updates.items():
+                self.conn.execute("""
+                    INSERT INTO local_catalog.iceberg_namespace_properties (
+                        catalog_name,
+                        namespace,
+                        property_key,
+                        property_value
+                    ) VALUES (?, ?, ?, ?)
+                """, [self.name, namespace_str, key, value])
+
+        return properties_update_summary
+
+    def _has_catalog_changed(self) -> bool:
+        """Check if the catalog file has changed by comparing ETags.
+        
+        Returns:
+            bool: True if the catalog has changed, False otherwise
+        """
+        try:
+            current_etag = self.s3.info(self.catalog_uri)["ETag"]
+            has_changed = self.last_etag != current_etag
+            if has_changed:
+                self.last_etag = current_etag
+            return has_changed
+        except Exception as e:
+            logger.warning(f"Error checking catalog ETag: {str(e)}")
+            return True  # If we can't check, assume it changed to be safe

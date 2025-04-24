@@ -13,6 +13,18 @@ dependencies = [
     "pyiceberg>=0.6.0"
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+    "pandas>=2.0.0",
+    "pyarrow>=14.0.0"
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
