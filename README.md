@@ -91,7 +91,11 @@ table.append(arrow_table)
 ```
 
 Next steps:
+
 [] Reflect tables in the catalog (CREATE VIEW AS SELECT * FROM READ_ICEBERG())
+
 [] Reflect snapshots in a catalog table (CREATE TABLE snapshots as read_json())
+
 [] Improve performance (sync of .duckdb from local to s3 takes too long)
+
 [] Add fastAPI on top of the catalog to allow write from Snowflake and other clients
