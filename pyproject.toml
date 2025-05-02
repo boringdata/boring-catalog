@@ -1,6 +1,6 @@
 [project]
 name = "boringcatalog"
-version = "0.1.0"
+version = "0.2.0"
 description = "A DuckDB-based Iceberg catalog implementation"
 readme = "README.md"
 authors = [
@@ -8,11 +8,15 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "duckdb>=0.9.0",
     "s3fs>=2023.12.0",
-    "pyiceberg>=0.6.0"
+    "pyiceberg>=0.6.0",
+    "click>=8.0.0",
+    "duckdb>=0.9.0"
 ]
 urls = {Homepage = "https://github.com/boringdata/boring-catalog"}
+
+[project.scripts]
+ice = "boringcatalog.cli:cli"
 
 [project.optional-dependencies]
 test = [

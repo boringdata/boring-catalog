@@ -1,21 +1,16 @@
 # Boring Catalog
 
-A DuckDB-based Iceberg catalog implementation.
-
-The catalog is stored as a single .duckdb file in S3, making it lightweight and portable.
+A lightweight, file-based Iceberg catalog implementation using a single JSON file (e.g., on S3, local disk, or any fsspec-compatible storage).
 
 ## Why Boring Catalog?
-- Eliminates the need to host or maintain a dedicated catalog service
-- We can store all our Iceberg metadata in a single DuckDB file, including:
-  - Catalog metadata
-  - Pointers to Iceberg metadata files (via `read_json('s3://...')`)
-  - References to Iceberg table data (via `scan_iceberg('s3://...')`)
-- Enables easy sharing across teams and environments through simple S3 URLs using `ATTACH '<s3_url>'`
-- We can easily expose a FastAPI REST endpoint to enable writes from Snowflake and other external systems
+- No need to host or maintain a dedicated catalog service
+- All Iceberg metadata is managed in a single JSON file (e.g., `catalog.json`)
 
-## How It Works
+## How It Works ? 
 
-Boring Catalog uses S3 conditional PUT operations to synchronize the catalog across multiple clients, effectively preventing race conditions during concurrent access.
+Boring Catalog stores all Iceberg catalog state in a single JSON file (e.g., `s3://bucket/path/catalog.json`).
+- Namespaces and tables are tracked in this file
+- S3 conditional writes prevent concurrent modifications when storing catalog on S3
 
 ## Installation
 
@@ -23,79 +18,72 @@ Boring Catalog uses S3 conditional PUT operations to synchronize the catalog acr
 pip install boringcatalog
 ```
 
-## Usage
+## CLI Usage
 
-### Create namespace and table
+The package includes a command-line interface (CLI) tool called `ice` for managing Iceberg catalogs.
+
+### Initialize a Catalog
+
+```bash
+ice init my_catalog # store catalog and iceberg data locally
+ice init my_catalog --catalog s3://bucket/path/catalog.json # store catalog on s3
+ice init -p warehouse=s3://bucket/path/ # store iceberg data path/<table>/ and catalog in path/catalog/catalog.json
+ice init --warehouse ... --catalog .. # store catalg and iceberg data in different locations
+```
+
+ice init create a .ice/index directory in your current working directory storing your catalog configuration (as you would do when configuring a catalog in pyiceberg).
+
+### Commit a Table
+
+Get first some parquet data:
+```bash
+curl https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2023-01.parquet -o /tmp/yellow_tripdata_2023-01.parquet
+````
+
+Start playing (works only with parquet files):
+```
+ice commit my_table --source /tmp/yellow_tripdata_2023-01.parquet
+ice log my_table
+```
+
+### Explore your Iceberg with DuckDB
+```
+ice duck
+```
+
+This opens an interactive Duckdb session with pointers to all your tables and namespaces.
+
+```
+show;                               -- show all tables               
+select * from catalog.namespaces;   -- list namespaces
+select * from catalog.tables;       -- list tables
+select * from <namespace>.<table>;  -- query iceberg table
+```
+
+## Python Usage
+
+### Create a Catalog, Namespace, and Table
 
 ```python
 from boringcatalog import BoringCatalog
-from pyiceberg.schema import Schema
-from pyiceberg.types import LongType, StringType, DecimalType
-from pyiceberg.schema import NestedField
 
 catalog = BoringCatalog(
-    "my_catalog",
-    warehouse="s3://{your-bucket}/boringcatalog"
+    "my_catalog"
+    **{
+        ...
+    }
 )
 
-if ("my_namespace",) not in catalog.list_namespaces():
-    catalog.create_namespace("my_namespace")
 
-schema = Schema(
-    NestedField(1, "id", LongType(), required=True),
-    NestedField(2, "data", StringType()),
-    NestedField(3, "amount", DecimalType(5, 1))
-)
+# Create namespaces, tables like in PyIceberg
+catalog.create_namespace("my_namespace")
+catalog.create_table("my_namespace", "my_table")
+catalog.load_table("my_namespace.my_table")
+```
 
-if ("my_namespace", "my_table_2") not in catalog.list_tables():
-    table = catalog.create_table(
-        identifier=("my_namespace", "my_table_2"),
-        schema=schema,
-        properties={"write.format.default": "parquet"}
-    )
+You can then explore your iceberg with DuckDB:
+```
+ice duck --catalog path/to/catalog.json
 ```
 
 
-### Append data
-
-```python
-from boringcatalog import BoringCatalog
-from pyiceberg.schema import Schema
-from pyiceberg.types import LongType, StringType, DecimalType
-from pyiceberg.schema import NestedField
-
-catalog = BoringCatalog(
-    "my_catalog",
-    warehouse="s3://{your-bucket}/boringcatalog"
-)
-
-table = catalog.load_table(("my_namespace", "my_table_2"))
-
-dummy_data = pd.DataFrame({
-    "id": pd.Series(range(1, 10001), dtype="Int32"), 
-    "data": [f"Transaction_{i}" for i in range(1, 10001)],
-    "amount": [Decimal(str(min(i * 10.5, 9999.9))).quantize(Decimal('0.1')) for i in range(1, 10001)]   
-})
-
-arrow_table = pa.Table.from_pandas(
-    dummy_data,
-    schema=pa.schema([
-        ('id', pa.int32(), False), 
-        ('data', pa.string(), True),
-        ('amount', pa.decimal128(5, 1), True) 
-    ]),
-    safe=True
-)
-
-table.append(arrow_table)
-```
-
-Next steps:
-
-[] Reflect tables in the catalog (CREATE VIEW AS SELECT * FROM READ_ICEBERG())
-
-[] Reflect snapshots in a catalog table (CREATE TABLE snapshots as read_json())
-
-[] Improve performance (sync of .duckdb from local to s3 takes too long)
-
-[] Add fastAPI on top of the catalog to allow write from Snowflake and other clients
