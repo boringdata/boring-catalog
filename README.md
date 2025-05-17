@@ -1,6 +1,6 @@
 # Boring Catalog
 
-**Made by [boringdata.io](https://boringdata.io) — a data stack template product. Kickstart your Iceberg journey with Boring Data.**
+**Made by [boringdata.io](https://boringdata.io) — Kickstart your Iceberg journey with our data stack templates.**
 
 <img src="docs/boringdata.png" alt="Boring Data" width="400">
 
