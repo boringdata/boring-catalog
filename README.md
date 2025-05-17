@@ -1,10 +1,10 @@
-# Boring Catalog
 
-**Made by [boringdata.io](https://boringdata.io) — Kickstart your Iceberg journey with our data stack templates.**
+**[boringdata.io](https://boringdata.io) — Kickstart your Iceberg journey with our data stack templates.**
 
 <img src="docs/boringdata.png" alt="Boring Data" width="400">
 
 ----
+# Boring Catalog
 
 A lightweight, file-based Iceberg catalog implementation using a single JSON file (e.g., on S3, local disk, or any fsspec-compatible storage).
 
@@ -33,21 +33,34 @@ pip install boringcatalog
 ```bash
 ice init
 ```
-This creates `.ice/index` and a default local catalog file in `warehouse/catalog/catalog_boring.json`.
 
-You can also specify a remote catalog file:
+That's it ! Your catalog is now ready to use.
+
+2 files are created:
+   - `warehouse/catalog/catalog_boring.json` = catalog file 
+   - `.ice/index` = points to the catalog location (similar to a git index file, but for Iceberg)
+
+
+*Note: You can also specify a remote location for your Iceberg data and catalog file:*
 ```bash
 ice init -p warehouse=s3://mybucket/mywarehouse
 ```
-This will store the catalog file and iceberg data in S3.
+More details on the [Custom Init and Catalog Location](#custom-init-and-catalog-location) section.
+
 
 You can then start using the catalog:
-```python
+
+### Commit a table
+```bash
+# Get some data
 curl https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2023-01.parquet -o /tmp/yellow_tripdata_2023-01.parquet
+
+# Commit the table
 ice commit my_table --source /tmp/yellow_tripdata_2023-01.parquet
 ```
 
-Have a look at the commit history:
+### Check the commit history:
+
 ```bash
 ice log 
 ```
