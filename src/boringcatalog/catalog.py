@@ -50,22 +50,31 @@ class ConcurrentModificationError(CommitFailedException):
 class BoringCatalog(MetastoreCatalog):
     """A simple file-based Iceberg catalog implementation."""
     
-    def __init__(self, name: str = DEFAULT_CATALOG_NAME, **properties: str):
+    def __init__(self, name: str = None, **properties: str):
+        # If name or properties are not provided, try to read them from .ice/index once
+        index_path = os.path.join(os.getcwd(), ".ice/index")
+        index = None
+        if (name is None or not properties) and os.path.exists(index_path):
+            with open(index_path, 'r') as f:
+                index = json.load(f)
+            if name is None:
+                name = index.get("catalog_name", DEFAULT_CATALOG_NAME)
+            if not properties:
+                properties = index.get("properties", {})
+        if name is None:
+            name = DEFAULT_CATALOG_NAME
         super().__init__(name, **properties)
         
 
-        if self.properties.get("uri"):
+        if index is not None and "catalog_uri" in index:
+            self.uri = index["catalog_uri"]
+            self.properties = index["properties"]
+        elif self.properties.get("uri"):
             self.uri = self.properties.get("uri")
-        elif  self.properties.get("warehouse"):
+        elif self.properties.get("warehouse"):
             self.uri = os.path.join(os.path.join(self.properties.get("warehouse"), "catalog"), f"catalog_{name}.json")
-
-        elif os.path.exists(os.path.join(os.getcwd(), ".ice/index")):
-            with open(os.path.join(os.getcwd(), ".ice/index"), 'r') as f:
-                index = json.load(f)
-                self.uri = index["catalog_uri"]
-                self.properties = index["properties"]
         else:
-            ValueError("Either provide 'catalog' or 'warehouse' property to initialize BoringCatalog")
+            raise ValueError("Either provide 'catalog' or 'warehouse' property to initialize BoringCatalog")
             
         init_catalog_tables = strtobool(self.properties.get("init_catalog_tables", DEFAULT_INIT_CATALOG_TABLES))
         

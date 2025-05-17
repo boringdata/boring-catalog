@@ -108,3 +108,113 @@ def test_ice_init_variants(tmp_path, args, expected_index, do_workflow):
     # We'll skip actually running duckdb interactively in CI
     # result = run_cli(["duck"], cwd=tmp_catalog_dir)
     # assert result.returncode == 0 
+
+def test_custom_catalog_name(tmp_path):
+    # Clean up .ice if it exists
+    ice_dir = tmp_path / ".ice"
+    if ice_dir.exists():
+        shutil.rmtree(ice_dir)
+    warehouse_dir = tmp_path / "customwarehouse"
+    warehouse_dir.mkdir(parents=True, exist_ok=True)
+    custom_name = "mycat"
+    # Run CLI with custom catalog name
+    result = run_cli([
+        "init", "-p", "warehouse=customwarehouse", "--catalog-name", custom_name
+    ], cwd=tmp_path)
+    assert result.returncode == 0
+    index_path = tmp_path / ".ice" / "index"
+    assert index_path.exists(), ".ice/index not created for custom catalog name"
+    with open(index_path) as f:
+        index = json.load(f)
+    assert index["catalog_uri"].endswith(f"catalog_{custom_name}.json")
+    assert index["catalog_name"] == custom_name
+    # Check BoringCatalog instance uses the custom name
+    os.chdir(tmp_path)
+    catalog = BoringCatalog()
+    assert catalog.name == custom_name
+    # Check catalog.json content
+    with open(index["catalog_uri"]) as f:
+        catalog_json = json.load(f)
+    assert catalog_json["catalog_name"] == custom_name 
+
+def test_custom_catalog_file_path(tmp_path):
+    # Test initializing with a fully custom catalog file path
+    ice_dir = tmp_path / ".ice"
+    if ice_dir.exists():
+        shutil.rmtree(ice_dir)
+    custom_catalog_path = tmp_path / "mydir" / "mycustom.json"
+    custom_catalog_path.parent.mkdir(parents=True, exist_ok=True)
+    result = run_cli([
+        "init", "--catalog", str(custom_catalog_path), "--catalog-name", "specialcat"
+    ], cwd=tmp_path)
+    assert result.returncode == 0
+    index_path = tmp_path / ".ice" / "index"
+    assert index_path.exists(), ".ice/index not created for custom catalog path"
+    with open(index_path) as f:
+        index = json.load(f)
+    assert index["catalog_uri"] == str(custom_catalog_path)
+    assert index["catalog_name"] == "specialcat"
+    assert custom_catalog_path.exists(), "Custom catalog file was not created"
+    # Check BoringCatalog loads from this path
+    os.chdir(tmp_path)
+    catalog = BoringCatalog()
+    assert catalog.name == "specialcat"
+    assert catalog.uri == str(custom_catalog_path)
+
+
+def test_reinit_overwrite_behavior(tmp_path):
+    # Test running ice init twice in the same directory
+    ice_dir = tmp_path / ".ice"
+    if ice_dir.exists():
+        shutil.rmtree(ice_dir)
+    warehouse_dir = tmp_path / "warehouse"
+    warehouse_dir.mkdir(parents=True, exist_ok=True)
+    # First init
+    result1 = run_cli(["init", "-p", "warehouse=warehouse"], cwd=tmp_path)
+    assert result1.returncode == 0
+    index_path = tmp_path / ".ice" / "index"
+    assert index_path.exists()
+    with open(index_path) as f:
+        index1 = json.load(f)
+    # Second init (should overwrite or succeed)
+    result2 = run_cli(["init", "-p", "warehouse=warehouse"], cwd=tmp_path)
+    # Accept both overwrite and success (should not crash)
+    assert result2.returncode == 0
+    with open(index_path) as f:
+        index2 = json.load(f)
+    # The index file should still be valid and point to the same warehouse
+    assert index2["properties"]["warehouse"] == "warehouse"
+
+
+def test_manual_index_loading(tmp_path):
+    # Test loading a catalog from a manually created .ice/index file
+    ice_dir = tmp_path / ".ice"
+    ice_dir.mkdir(exist_ok=True)
+    custom_catalog_path = tmp_path / "manualcat.json"
+    # Write a minimal catalog file
+    with open(custom_catalog_path, "w") as f:
+        json.dump({"catalog_name": "manualcat", "namespaces": {}, "tables": {}}, f)
+    # Write a custom .ice/index
+    index = {
+        "catalog_uri": str(custom_catalog_path),
+        "catalog_name": "manualcat",
+        "properties": {"warehouse": "manualwarehouse"}
+    }
+    with open(ice_dir / "index", "w") as f:
+        json.dump(index, f)
+    os.chdir(tmp_path)
+    catalog = BoringCatalog()
+    assert catalog.name == "manualcat"
+    assert catalog.uri == str(custom_catalog_path)
+    assert catalog.properties["warehouse"] == "manualwarehouse"
+    # Now test missing catalog_name (should default to 'boring')
+    index2 = {
+        "catalog_uri": str(custom_catalog_path),
+        "properties": {"warehouse": "manualwarehouse"}
+    }
+    with open(ice_dir / "index", "w") as f:
+        json.dump(index2, f)
+    catalog2 = BoringCatalog()
+    assert catalog2.name == "boring"
+    assert catalog2.uri == str(custom_catalog_path)
+    assert catalog2.properties["warehouse"] == "manualwarehouse" 

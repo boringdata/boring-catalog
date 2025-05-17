@@ -35,10 +35,11 @@ def load_index():
     except (FileNotFoundError, json.JSONDecodeError):
         return None
 
-def save_index(properties, catalog_uri=None):
-    """Save configuration to .ice/index with separate catalog_uri and properties sections."""
+def save_index(properties, catalog_uri=None, catalog_name=None):
+    """Save configuration to .ice/index with separate catalog_uri, catalog_name, and properties sections."""
     config = {
         "catalog_uri": catalog_uri,
+        "catalog_name": catalog_name,
         "properties": properties
     }
     index_path = os.path.join(ensure_ice_dir(), 'index')
@@ -56,8 +57,9 @@ def get_catalog():
     properties = config.get("properties", {})
     if config.get("catalog_uri"):
         properties["uri"] = config["catalog_uri"]
-        
-    return BoringCatalog(DEFAULT_CATALOG_NAME, **properties)
+    # Use catalog_name from top-level field if present, else default
+    catalog_name = config.get("catalog_name", DEFAULT_CATALOG_NAME)
+    return BoringCatalog(catalog_name, **properties)
 
 def print_version(ctx, param, value):
     if not value or ctx.resilient_parsing:
@@ -110,9 +112,10 @@ def cli(ctx):
         ctx.exit()
 
 @cli.command()
-@click.option('--catalog', help='Custom location for catalog.json (default: warehouse/catalog/catalog_boring.json)')
+@click.option('--catalog', help='Custom location for catalog.json (default: warehouse/catalog/catalog_<catalog_name>.json)')
 @click.option('--property', '-p', multiple=True, help='Properties in the format key=value')
-def init(catalog , property):
+@click.option('--catalog-name', default=DEFAULT_CATALOG_NAME, show_default=True, help='Name of the catalog (used in file naming and metadata)')
+def init(catalog, property, catalog_name):
     """Initialize a new Boring Catalog."""
 
     try:
@@ -125,22 +128,24 @@ def init(catalog , property):
                 raise click.ClickException(f"Invalid property format: {prop}. Use key=value format")
         
         if not catalog and not "warehouse" in properties:
-            catalog = f"warehouse/catalog/catalog_{DEFAULT_CATALOG_NAME}.json"
+            catalog = f"warehouse/catalog/catalog_{catalog_name}.json"
             properties["warehouse"] = "warehouse"
 
         elif not catalog and "warehouse" in properties:
-            catalog = f"{properties['warehouse']}/catalog/catalog_{DEFAULT_CATALOG_NAME}.json"
-            
-        save_index(properties, catalog)
+            catalog = f"{properties['warehouse']}/catalog/catalog_{catalog_name}.json"
+        
+        # Do NOT save catalog_name in properties anymore
+        save_index(properties, catalog, catalog_name)
 
         properties["uri"] = catalog
-        catalog_instance = BoringCatalog(DEFAULT_CATALOG_NAME, **properties)
+        catalog_instance = BoringCatalog(catalog_name, **properties)
         
         # Display information in specific order
         click.echo(f"Initialized Boring Catalog in {os.path.join('.ice', 'index')}")
         click.echo(f"Catalog location: {catalog}")
         if "warehouse" in properties:
             click.echo(f"Warehouse location: {properties['warehouse']}")
+        click.echo(f"Catalog name: {catalog_name}")
 
     except Exception as e:
         click.echo(f"Error initializing catalog: {str(e)}", err=True)
