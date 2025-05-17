@@ -1,5 +1,11 @@
 # Boring Catalog
 
+**Made by [boringdata.io](https://boringdata.io) — a data stack template product. Kickstart your Iceberg journey with Boring Data.**
+
+<img src="docs/boringdata.png" alt="Boring Data" width="400">
+
+----
+
 A lightweight, file-based Iceberg catalog implementation using a single JSON file (e.g., on S3, local disk, or any fsspec-compatible storage).
 
 ## Why Boring Catalog?
