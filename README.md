@@ -4,7 +4,9 @@ A lightweight, file-based Iceberg catalog implementation using a single JSON fil
 
 ## Why Boring Catalog?
 - No need to host or maintain a dedicated catalog service
-- All Iceberg metadata is managed in a single JSON file (e.g., `catalog.json`)
+- All catalog state is managed in a single JSON file (e.g., `catalog.json`)
+- Easy to use, easy to understand, perfect to get started with Iceberg
+- DuckDB CLI interface to easily explore your iceberg tables and metadata
 
 ## How It Works ? 
 
@@ -25,13 +27,25 @@ The package includes a command-line interface (CLI) tool called `ice` for managi
 ### Initialize a Catalog
 
 ```bash
-ice init my_catalog # store catalog and iceberg data locally
-ice init my_catalog --catalog s3://bucket/path/catalog.json # store catalog on s3
-ice init -p warehouse=s3://bucket/path/ # store iceberg data path/<table>/ and catalog in path/catalog/catalog.json
-ice init --warehouse ... --catalog .. # store catalg and iceberg data in different locations
+ice init
 ```
 
 ice init create a .ice/index directory in your current working directory storing your catalog configuration (as you would do when configuring a catalog in pyiceberg).
+
+You can also specify a remote warehouse location:
+
+```bash
+ice init -p warehouse=s3://bucket/warehouse/ # store iceberg data path/<table>/ and catalog in path/catalog/catalog.json
+```
+
+You can configure your Iceberg catalog in several ways depending where you want to store your catalog and iceberg data:
+
+| Command Example | Catalog File Location | Warehouse/Data Location | Use Case |
+|-----------------|----------------------|------------------------|----------|
+| `ice init` | `warehouse/catalog/catalog_boring.json` | `warehouse/` | Local, simple |
+| `ice init -p warehouse=...` | `<warehouse>/catalog/catalog_boring.json` | `<warehouse>/` | Custom warehouse |
+| `ice init --catalog ...` | `<custom>.json` | (to define when creating a table) | Custom catalog file |
+| `ice init --catalog ... -p warehouse=...` | `<custom>.json` | `<warehouse>/` | Full control |
 
 ### Commit a Table
 
@@ -45,6 +59,9 @@ Start playing (works only with parquet files):
 ice commit my_table --source /tmp/yellow_tripdata_2023-01.parquet
 ice log my_table
 ```
+
+If no namespace is specified, a default namespace is created and used. 
+If the table does not exist, it is created.
 
 ### Explore your Iceberg with DuckDB
 ```
@@ -67,23 +84,28 @@ select * from <namespace>.<table>;  -- query iceberg table
 ```python
 from boringcatalog import BoringCatalog
 
-catalog = BoringCatalog(
-    "my_catalog"
-    **{
-        ...
-    }
-)
+catalog = BoringCatalog() # auto detect .ice/index catalog
+```
 
 
-# Create namespaces, tables like in PyIceberg
+or specify a catalog:
+```python
+catalog = BoringCatalog(catalog_uri="path/to/catalog.json")
+```
+
+You can then interact with your iceberg catalog as you would do with pyiceberg:
+
+```python
 catalog.create_namespace("my_namespace")
 catalog.create_table("my_namespace", "my_table")
 catalog.load_table("my_namespace.my_table")
+
+df = pq.read_table("/tmp/yellow_tripdata_2023-01.parquet")
+table = catalog.load_table(("ice_default", "my_table"))
+table.append(df)
 ```
 
-You can then explore your iceberg with DuckDB:
-```
-ice duck --catalog path/to/catalog.json
-```
+## Roadmap
 
-
+- [ ] Improve CLI to allow MERGE operation, partition spec, etc.
+- [ ] Expose REST API for integration with AWS, Snowflake, etc.

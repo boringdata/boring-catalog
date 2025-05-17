@@ -42,7 +42,7 @@ from time import perf_counter
 logger = logging.getLogger(__name__)
 
 DEFAULT_INIT_CATALOG_TABLES = "true"
-
+DEFAULT_CATALOG_NAME = "boring"
 class ConcurrentModificationError(CommitFailedException):
     """Raised when a concurrent modification is detected."""
     pass
@@ -50,16 +50,23 @@ class ConcurrentModificationError(CommitFailedException):
 class BoringCatalog(MetastoreCatalog):
     """A simple file-based Iceberg catalog implementation."""
     
-    def __init__(self, name: str, **properties: str):
+    def __init__(self, name: str = DEFAULT_CATALOG_NAME, **properties: str):
         super().__init__(name, **properties)
         
+
         if self.properties.get("uri"):
             self.uri = self.properties.get("uri")
-        else:
-            if not self.properties.get("warehouse"):
-                raise ValueError("Either provide 'catalog' or 'warehouse' property to initialize BoringCatalog")
+        elif  self.properties.get("warehouse"):
             self.uri = os.path.join(os.path.join(self.properties.get("warehouse"), "catalog"), f"catalog_{name}.json")
 
+        elif os.path.exists(os.path.join(os.getcwd(), ".ice/index")):
+            with open(os.path.join(os.getcwd(), ".ice/index"), 'r') as f:
+                index = json.load(f)
+                self.uri = index["catalog_uri"]
+                self.properties = index["properties"]
+        else:
+            ValueError("Either provide 'catalog' or 'warehouse' property to initialize BoringCatalog")
+            
         init_catalog_tables = strtobool(self.properties.get("init_catalog_tables", DEFAULT_INIT_CATALOG_TABLES))
         
         if init_catalog_tables:

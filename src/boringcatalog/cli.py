@@ -16,6 +16,7 @@ logging.basicConfig(
 )
 
 DEFAULT_NAMESPACE  = "ice_default"
+DEFAULT_CATALOG_NAME = "boring"
 # Silence pyiceberg logs
 logging.getLogger('pyiceberg').setLevel(logging.WARNING)
 
@@ -56,7 +57,7 @@ def get_catalog():
     if config.get("catalog_uri"):
         properties["uri"] = config["catalog_uri"]
         
-    return BoringCatalog("boring", **properties)
+    return BoringCatalog(DEFAULT_CATALOG_NAME, **properties)
 
 def print_version(ctx, param, value):
     if not value or ctx.resilient_parsing:
@@ -109,13 +110,12 @@ def cli(ctx):
         ctx.exit()
 
 @cli.command()
-@click.option('--catalog', help='Custom location for catalog.json (optional)')
+@click.option('--catalog', help='Custom location for catalog.json (default: warehouse/catalog/catalog_boring.json)')
 @click.option('--property', '-p', multiple=True, help='Properties in the format key=value')
 def init(catalog , property):
     """Initialize a new Boring Catalog."""
 
     try:
-        # Prepare catalog properties
         properties = {}
         for prop in property:
             try:
@@ -125,22 +125,20 @@ def init(catalog , property):
                 raise click.ClickException(f"Invalid property format: {prop}. Use key=value format")
         
         if not catalog and not "warehouse" in properties:
-            catalog = "warehouse/catalog/catalog.json"
+            catalog = f"warehouse/catalog/catalog_{DEFAULT_CATALOG_NAME}.json"
             properties["warehouse"] = "warehouse"
 
-        # Save configuration to index with separate catalog_uri if specified
-        catalog_uri = os.path.abspath(catalog) if catalog else None
-        save_index(properties, catalog_uri)
-        
-        # Initialize the catalog
-        if catalog_uri:
-            properties["uri"] = catalog_uri
-        
-        catalog_instance = BoringCatalog("boring", **properties)
+        elif not catalog and "warehouse" in properties:
+            catalog = f"{properties['warehouse']}/catalog/catalog_{DEFAULT_CATALOG_NAME}.json"
+            
+        save_index(properties, catalog)
+
+        properties["uri"] = catalog
+        catalog_instance = BoringCatalog(DEFAULT_CATALOG_NAME, **properties)
         
         # Display information in specific order
         click.echo(f"Initialized Boring Catalog in {os.path.join('.ice', 'index')}")
-        click.echo(f"Catalog location: {catalog if catalog else catalog_instance.uri}")
+        click.echo(f"Catalog location: {catalog}")
         if "warehouse" in properties:
             click.echo(f"Warehouse location: {properties['warehouse']}")
 
@@ -208,7 +206,7 @@ def duck(catalog_path=None):
     try:
         if catalog_path:
             properties = {"uri": os.path.abspath(catalog_path)}
-            catalog = BoringCatalog("boring", **properties)
+            catalog = BoringCatalog(DEFAULT_CATALOG_NAME, **properties)
         else:
             config = load_index()
             if not config:
@@ -287,6 +285,23 @@ def create_namespace(namespace, property):
         click.echo(f"Error creating namespace: {str(e)}", err=True)
         raise click.Abort()
 
+# Add a utility function to resolve table identifier with namespace logic
+
+def resolve_table_identifier_with_namespace(catalog, table_identifier):
+    """Resolve table identifier to include namespace, creating default if needed (like in commit)."""
+    if len(table_identifier.split(".")) == 1:
+        namespaces = catalog.list_namespaces()
+        if len(namespaces) == 0:
+            click.echo(f"No namespace found, creating and using default namespace: {DEFAULT_NAMESPACE}")
+            namespace = DEFAULT_NAMESPACE
+            catalog.create_namespace(namespace)
+        elif len(namespaces) == 1:
+            namespace = namespaces[0][0]
+        else:
+            raise click.ClickException("No namespace specified. Please specify a namespace for the table.")
+        table_identifier = f"{namespace}.{table_identifier}"
+    return table_identifier
+
 @cli.command(name='commit')
 @click.argument('table_identifier', required=True)
 @click.option('--source', required=True, help='Parquet file URI to commit as a new snapshot')
@@ -295,36 +310,19 @@ def commit(table_identifier, source, mode):
     """Commit a new snapshot to a table from a Parquet file."""
     try:
         catalog = get_catalog()
-        
-        if len(table_identifier.split(".")) == 1:
-            namespaces = catalog.list_namespaces()
-            if len(namespaces) == 0:
-                click.echo("No namespace found, using default namespace")
-                namespace = DEFAULT_NAMESPACE
-                catalog.create_namespace(namespace) 
-            elif len(namespaces) == 1:
-                namespace = namespaces[0][0]
-            else:
-                raise click.ClickException("No namespace specified. Please specify a namespace for the table.")
-            table_identifier = f"{namespace}.{table_identifier}"
-
+        table_identifier = resolve_table_identifier_with_namespace(catalog, table_identifier)
         df = pq.read_table(source)
-        
         if not catalog.table_exists(table_identifier):
             click.echo(f"Table {table_identifier} does not exist in the catalog. Creating it now...")
             catalog.create_table(table_identifier, schema=df.schema)
-
         table = catalog.load_table(table_identifier)
-
         if mode == "append":
             table.append(df)
         elif mode == "overwrite":
             table.overwrite(df)
         else:
             raise click.ClickException(f"Invalid mode: {mode}. Use 'append' or 'overwrite'.")
-
         click.echo(f"Committed {source} to table {table_identifier}")
-
     except Exception as e:
         click.echo(f"Error committing file to table: {str(e)}", err=True)
         raise click.Abort()
@@ -332,31 +330,32 @@ def commit(table_identifier, source, mode):
 @cli.command(name='log')
 @click.argument('table_identifier', required=False)
 def log_snapshots(table_identifier):
-    """Print all snapshot entries for a table or all tables in the current catalog."""
+    """Print all snapshot entries for a table or all tables in the current catalog or default namespace."""
     try:
         catalog = get_catalog()
-        catalog_data = catalog.catalog  # This is the loaded catalog.json dict
-
         if not table_identifier:
-            # List logs for all tables in all namespaces
+            # Default to the default namespace, create if needed
             namespaces = catalog.list_namespaces()
+            if not any(ns[0] == DEFAULT_NAMESPACE for ns in namespaces):
+                click.echo(f"No namespace found, creating and using default namespace: {DEFAULT_NAMESPACE}")
+                catalog.create_namespace(DEFAULT_NAMESPACE)
+            tables = catalog.list_tables(DEFAULT_NAMESPACE)
+            if not tables:
+                click.echo(f"No tables found in default namespace '{DEFAULT_NAMESPACE}'.")
+                return
             found_any = False
-            for ns_tuple in namespaces:
-                ns = ".".join(ns_tuple)
-                tables = catalog.list_tables(ns)
-                for table in tables:
-                    table_identifier_full = f"{ns}.{table[-1]}"
-                    if print_table_log(catalog, table_identifier_full, label=f"=== Log for table: {table_identifier_full} ==="):
-                        found_any = True
+            for table in tables:
+                table_identifier_full = f"{DEFAULT_NAMESPACE}.{table[-1]}"
+                if print_table_log(catalog, table_identifier_full, label=f"=== Log for table: {table_identifier_full} ==="):
+                    found_any = True
             if not found_any:
-                click.echo("No snapshots found for any table.")
+                click.echo("No snapshots found for any table in the default namespace.")
             return
-
+        # If a table_identifier is provided, resolve it as in commit
+        table_identifier = resolve_table_identifier_with_namespace(catalog, table_identifier)
         if not catalog._table_exists(table_identifier):
             raise click.ClickException(f"Table {table_identifier} does not exist in the catalog.")
-
         print_table_log(catalog, table_identifier)
-
     except Exception as e:
         click.echo(f"Error loading catalog or snapshots: {str(e)}", err=True)
         raise click.Abort()
