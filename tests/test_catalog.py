@@ -88,7 +88,7 @@ def test_ice_init_variants(tmp_path, args, expected_index, do_workflow, caplog):
     if not expected_index["properties"].get("warehouse"):
         expected_warehouse = str(os.path.dirname(index["catalog_uri"]))
         assert catalog.properties["warehouse"] == expected_warehouse
-        assert f"Using catalog folder as warehouse: {expected_warehouse}" in caplog.text
+        assert f"Using catalog folder to store iceberg data: {expected_warehouse}" in caplog.text
     namespaces = catalog.list_namespaces()
     assert isinstance(namespaces, list)
     # If do_workflow, run commit, log, catalog commands
