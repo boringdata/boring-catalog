@@ -65,7 +65,6 @@ class BoringCatalog(MetastoreCatalog):
             name = DEFAULT_CATALOG_NAME
         super().__init__(name, **properties)
         
-
         if index is not None and "catalog_uri" in index:
             self.uri = index["catalog_uri"]
             self.properties = index["properties"]
@@ -75,7 +74,13 @@ class BoringCatalog(MetastoreCatalog):
             self.uri = os.path.join(os.path.join(self.properties.get("warehouse"), "catalog"), f"catalog_{name}.json")
         else:
             raise ValueError("Either provide 'catalog' or 'warehouse' property to initialize BoringCatalog")
-            
+
+        # Always infer warehouse if missing and uri is set
+        if self.uri and not self.properties.get("warehouse"):
+            warehouse_path = os.path.dirname(self.uri)
+            self.properties["warehouse"] = warehouse_path
+            logging.info(f"No --warehouse specified for the catalog. Using catalog folder to store iceberg data: {warehouse_path}")
+
         init_catalog_tables = strtobool(self.properties.get("init_catalog_tables", DEFAULT_INIT_CATALOG_TABLES))
         
         if init_catalog_tables:
@@ -96,13 +101,7 @@ class BoringCatalog(MetastoreCatalog):
     def _ensure_tables_exist(self):
         """Ensure catalog directory and catalog.json exist."""
         try:
-            # location = self._resolve_table_location(location, namespace, table_name)
-            # from pyiceberg.io import _infer_file_io_from_scheme
-            # _infer_file_io_from_scheme(self.uri, self.properties)
-            # from pyiceberg.io import _import_file_io
-            # _import_file_io(self.uri)
-            # location_provider = load_location_provider(table_location=location, table_properties=properties)
-            # metadata_location = location_provider.new_table_metadata_file_location()
+
             io = load_file_io(properties=self.properties, location=self.uri)
             
             # Check if catalog file exists
@@ -121,31 +120,6 @@ class BoringCatalog(MetastoreCatalog):
 
         except Exception as e:
             raise ValueError(f"Failed to initialize catalog at {self.uri}: {str(e)}")
-
-    def _has_catalog_changed(self) -> bool:
-        """Check if the catalog file has changed by comparing ETags.
-        
-        Returns:
-            bool: True if the catalog has changed, False otherwise
-        """
-        try:
-            io = load_file_io(properties=self.properties, location=self.uri)
-            input_file = io.new_input(self.uri)
-            
-            if not input_file.exists():
-                return True
-                
-            metadata = input_file.metadata() if hasattr(input_file, 'metadata') else {}
-            current_etag = metadata.get("ETag")
-            
-            has_changed = self.last_etag != current_etag
-            if has_changed:
-                self.last_etag = current_etag
-            return has_changed
-            
-        except Exception as e:
-            logger.warning(f"Error checking catalog ETag: {str(e)}")
-            return True  # If we can't check, assume it changed to be safe
 
     def _read_catalog_json(self):
         """Read catalog.json using FileIO, returning (data, etag)."""

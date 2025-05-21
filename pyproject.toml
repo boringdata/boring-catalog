@@ -1,6 +1,6 @@
 [project]
 name = "boringcatalog"
-version = "0.3.0"
+version = "0.4.0"
 description = "A DuckDB-based Iceberg catalog implementation"
 readme = "README.md"
 authors = [

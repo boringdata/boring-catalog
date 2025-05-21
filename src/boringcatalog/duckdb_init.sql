@@ -4,11 +4,11 @@ SET VARIABLE tmp_file = '/tmp/iceberg_init.sql';
 
 .mode list
 .header off 
-SELECT 'Loading extensions...';
+SELECT 'boring-catalog: Loading extensions...';
 INSTALL iceberg;
 LOAD iceberg;
 
-SELECT 'Init schemas and tables...' ;
+SELECT 'boring-catalog: Init schemas and tables...' ;
 -- Create schemas
 CREATE SCHEMA IF NOT EXISTS catalog;
 CREATE TABLE catalog.namespaces AS 

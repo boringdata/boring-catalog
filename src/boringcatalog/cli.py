@@ -133,7 +133,7 @@ def init(catalog, property, catalog_name):
 
         elif not catalog and "warehouse" in properties:
             catalog = f"{properties['warehouse']}/catalog/catalog_{catalog_name}.json"
-        
+
         # Do NOT save catalog_name in properties anymore
         save_index(properties, catalog, catalog_name)
 
@@ -204,10 +204,14 @@ def list_tables(namespace):
         click.echo(f"Error listing tables: {str(e)}", err=True)
         raise click.Abort()
 
-@cli.command()
-@click.argument('catalog_path', required=False)
-def duck(catalog_path=None):
-    """Open DuckDB CLI with catalog configuration. Optionally provide a path to a catalog.json."""
+@cli.command(context_settings=dict(
+    ignore_unknown_options=True,
+    allow_extra_args=True,
+))
+@click.option('--catalog-path', help='Optional path to a catalog.json')
+@click.argument('duckdb_args', nargs=-1)
+def duck(catalog_path=None, duckdb_args=()):
+    """Open DuckDB CLI with catalog configuration. Optionally provide a path to a catalog.json. Extra arguments are passed to DuckDB CLI."""
     try:
         if catalog_path:
             properties = {"uri": os.path.abspath(catalog_path)}
@@ -231,8 +235,10 @@ def duck(catalog_path=None):
         # Add S3 configuration at the beginning of the script
         if "s3" in catalog.uri:
             s3_config = (
-                "mode .lines\n"
-                "SELECT 'Loading s3 secrets...' ;\n"
+                ".mode list\n"
+                ".header off\n"
+                "SELECT 'boring-catalog: Loading s3 secrets...' ;\n"
+                ".mode line\n"
                 "CREATE OR REPLACE SECRET secret (TYPE s3, PROVIDER credential_chain);\n"
             )
             # Insert the S3 configuration right after the first comment line
@@ -246,8 +252,8 @@ def duck(catalog_path=None):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.sql', delete=False) as f:
             f.write(sql)
 
-        # Start DuckDB CLI with the initialization script
-        cmd = ['duckdb', '--init', f.name]
+        # Start DuckDB CLI with the initialization script and extra args
+        cmd = ['duckdb', '--init', f.name] + list(duckdb_args)
         
         subprocess.run(cmd)
 

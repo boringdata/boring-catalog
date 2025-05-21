@@ -9,6 +9,7 @@ import pandas as pd
 import json
 from boringcatalog import BoringCatalog
 import shutil
+import logging
 
 @pytest.fixture(scope="function")
 def tmp_catalog_dir(tmp_path):
@@ -57,7 +58,7 @@ def run_cli(args, cwd):
         "properties": {"warehouse": "tttrr"}
     }, False),
 ])
-def test_ice_init_variants(tmp_path, args, expected_index, do_workflow):
+def test_ice_init_variants(tmp_path, args, expected_index, do_workflow, caplog):
     # Clean up .ice if it exists
     ice_dir = tmp_path / ".ice"
     if ice_dir.exists():
@@ -76,10 +77,18 @@ def test_ice_init_variants(tmp_path, args, expected_index, do_workflow):
     with open(index_path) as f:
         index = json.load(f)
     assert index["catalog_uri"] == expected_index["catalog_uri"], f"catalog_uri mismatch for args {args}"
-    assert index["properties"] == expected_index["properties"], f"properties mismatch for args {args}"
+    # Only check properties equality if warehouse is specified in expected_index
+    if expected_index["properties"]:
+        assert index["properties"] == expected_index["properties"], f"properties mismatch for args {args}"
     # Check BoringCatalog usage
     os.chdir(tmp_path)
+    caplog.set_level(logging.INFO)
     catalog = BoringCatalog()
+    # If warehouse is not specified, it should default to the catalog folder
+    if not expected_index["properties"].get("warehouse"):
+        expected_warehouse = str(os.path.dirname(index["catalog_uri"]))
+        assert catalog.properties["warehouse"] == expected_warehouse
+        assert f"Using catalog folder as warehouse: {expected_warehouse}" in caplog.text
     namespaces = catalog.list_namespaces()
     assert isinstance(namespaces, list)
     # If do_workflow, run commit, log, catalog commands

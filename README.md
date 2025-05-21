@@ -1,4 +1,3 @@
-
 **[boringdata.io](https://boringdata.io) — Kickstart your Iceberg journey with our data stack templates.**
 
 <img src="docs/boringdata.png" alt="Boring Data" width="400">
@@ -47,6 +46,13 @@ ice init -p warehouse=s3://mybucket/mywarehouse
 ```
 More details on the [Custom Init and Catalog Location](#custom-init-and-catalog-location) section.
 
+*Note: If you are using an S3 path (e.g., `s3://...`) for your catalog file or warehouse, make sure your CLI environment is authenticated with AWS. For example, you can set your AWS profile with:*
+
+```bash
+export AWS_PROFILE=your-provider
+```
+
+*You must have valid AWS credentials configured for the CLI to access S3 resources.*
 
 You can then start using the catalog:
 
@@ -125,4 +131,5 @@ You can configure your Iceberg catalog in several ways, depending on where you w
 
 ## Roadmap
 - [ ] Improve CLI to allow MERGE operation, partition spec, etc.
+- [ ] Improve CLI to get info about table schema / partition spec / etc.
 - [ ] Expose REST API for integration with AWS, Snowflake, etc.
